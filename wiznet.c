@@ -472,7 +472,8 @@ sock_status_t socket(wiznet_t *wiznet, socket_t *sock) {
 
     // open[ and connect] socket
     sock_open(sock);
-    if (sock->type == SOCK_TYPE_TCP) sock_connect(sock);
+	// only connect if target IP exists, allows server to listen
+    if (sock->type == SOCK_TYPE_TCP && sock->ip[0] && sock->ip[1] && sock->ip[2] && sock->ip[3] ) { sock_connect(sock); }
 
 
     // successful opening[ and connection]
@@ -692,6 +693,9 @@ void sendto(socket_t *sock, uint8_t *data, uint16_t len) {
 /*
  *  Read data from HW RX buffer of socket 'sock' into array 'buf' with size of 'buf_size'. Function
  *  determines and returns number of bytes have been read
+ *
+ *  UPDATE: Allows buf_size to be less than Wiznet buffer
+ *  Must call this multiple times to clear the buffer
  */
 uint16_t recv(socket_t *sock, uint8_t *buf, uint16_t buf_size) {
     // TODO: case when we do not read incoming data for a long time
@@ -717,8 +721,9 @@ uint16_t recv(socket_t *sock, uint8_t *buf, uint16_t buf_size) {
     else if (rx_end_ptr < rx_start_ptr) {
         len_of_received_data = (0xFFFF-rx_start_ptr) + (rx_end_ptr-0x0000);
         if (len_of_received_data > buf_size) {
-            printf("Received data is bigger than buffer\n");
-            return 0;
+            len_of_received_data= buf_size;
+            //printf("Received data is bigger than buffer\n");
+            //return 0;
         }
         // we need to read the data in 2 steps: [from start to 0xFFFF] and [from 0x0000 to end]
         _read_spi(sock->_host_wiznet, rx_start_ptr, sock_n_rx_buffer, buf, 0xFFFF-rx_start_ptr);
@@ -728,16 +733,25 @@ uint16_t recv(socket_t *sock, uint8_t *buf, uint16_t buf_size) {
     else {
         len_of_received_data = rx_end_ptr-rx_start_ptr;
         if (len_of_received_data > buf_size) {
-            printf("Received data is bigger than buffer\n");
-            return 0;
+            len_of_received_data= buf_size;
+            //printf("Received data is bigger than buffer\n");
+            //return 0;
         }
         _read_spi(sock->_host_wiznet, rx_start_ptr, sock_n_rx_buffer, buf, len_of_received_data);
     }
 
     // 3. update the pointer to the end of data in RX buffer
-    rx_end_ptr = SWAP_TWO_BYTES(rx_end_ptr);
-    _write_spi(sock->_host_wiznet, Sn_RX_RD, sock_n_register, (uint8_t *)&rx_end_ptr, sizeof(uint16_t));
+    uint16_t new_rx_ptr;
+    // just move to the part that we've read
+    new_rx_ptr = rx_start_ptr + len_of_received_data;
 
+    new_rx_ptr = SWAP_TWO_BYTES(new_rx_ptr);
+
+    _write_spi(sock->_host_wiznet,
+               Sn_RX_RD,
+               sock_n_register,
+               (uint8_t *)&new_rx_ptr,
+               sizeof(uint16_t));    
     // 4. send RECV command to notify Wiznet chip
     uint8_t byte = SOCK_CMD_RECV;
     _write_spi(sock->_host_wiznet, Sn_CR, sock_n_register, &byte, sizeof(uint8_t));
